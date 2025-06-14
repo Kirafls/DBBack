@@ -7,7 +7,7 @@ require('dotenv').config();
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 //declaracion de las funciuones de mysql
-const {buscarUser}=require('./consultas');
+const {buscarUser,crearCliente}=require('./consultas');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const SECRET_KEY = 'clave_secreta';
@@ -81,6 +81,39 @@ app.post('/tienda/login', (req, res) => {
     });
   });
 });
+
+app.post('/tienda/crearcliente', (req, res) => {
+  console.log("Solicitud de registro de cliente");
+  const { nombre, apellidos, rfc } = req.body;
+
+  // Validación básica de los datos recibidos
+  if (!nombre || !apellidos || !rfc) {
+    return res.status(400).json({
+      success: false,
+      message: 'Faltan campos obligatorios (nombre, apellido, rfc)'
+    });
+  }
+
+  // Llamada a la función crearCliente
+  crearCliente(connection, { nombre, apellidos, rfc }, (error, results) => {
+    if (error) {
+      console.error("Error al crear cliente:", error);
+      return res.status(500).json({
+        success: false,
+        message: 'Error en el servidor al crear el cliente',
+        error: error.message
+      });
+    }
+
+    console.log("Cliente creado exitosamente:", results);
+    res.status(201).json({
+      success: true,
+      message: 'Cliente registrado exitosamente',
+      clienteId: results.insertId
+    });
+  });
+});
+
 
 app.listen(PORT, () => {
     console.log(`Servidor corriendo en http://localhost:${PORT}`);

@@ -24,4 +24,14 @@ function buscarUser(connection, data, callback) {
     });
 }
 
-module.exports={buscarUser};//Se tienen que exportar cada una de las funciones
+function crearCliente(connection, data, callback) {
+    let insert = "INSERT INTO `cliente` (`nombre`, `apellidos`, `rfc`) VALUES (?, ?, ?)";
+    
+    connection.query(insert, [data.nombre, data.apellidos, data.rfc], function(error, results) {
+        if (error) {
+            return callback(error, null);
+        }
+        callback(null, results);
+    });
+}
+module.exports={buscarUser,crearCliente};//Se tienen que exportar cada una de las funciones
