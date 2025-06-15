@@ -1,7 +1,7 @@
-// server.js o app.js
 const express = require('express');
 const mysql = require('mysql2/promise');
 const cors = require('cors');
+const jwt = require('jsonwebtoken'); // Faltaba importar jwt
 
 const app = express();
 const port = 3000;
@@ -16,6 +16,7 @@ const dbConfig = {
   database: 'tiendabd' 
 };
 
+
 // Crear conexión a la base de datos
 async function createConnection() {
   try {
@@ -27,6 +28,73 @@ async function createConnection() {
     throw error;
   }
 }
+
+// Crear pool de conexiones en lugar de una sola conexión
+const dbPool = mysql.createPool(dbConfig);
+
+// Definir la clave secreta para JWT (debería estar en variables de entorno)
+const SECRET_KEY = 'tu_clave_secreta_super_segura'; // Cambia esto por una clave segura
+
+// Función para buscar usuario (ya la tienes correcta)
+async function buscarUser(connection, data) {
+  const isIdSearch = data.hasOwnProperty('id');
+  const searchValue = isIdSearch ? data.id : data.user;
+
+  let query = "SELECT `Id`, `pass`, `user`, `permiso` FROM empleado WHERE ";
+  query += isIdSearch ? "`Id` = ?" : "`user` = ?";
+
+  const [rows] = await connection.execute(query, [searchValue]);
+  return rows;
+}
+// Ruta de login
+app.post('/tienda/login', async (req, res) => {
+  const { username, password, id } = req.body;
+
+  if ((!username && !id) || !password) {
+    return res.status(400).json({ message: 'Se requiere (username o id) y password' });
+  }
+
+  try {
+    const connection = await dbPool.getConnection();
+    const searchCriteria = username ? { user: username } : { id };
+
+    const result = await buscarUser(connection, searchCriteria);
+    connection.release();
+
+    if (result.length === 0) {
+      return res.status(401).json({ message: 'Credenciales inválidas' });
+    }
+
+    const user = result[0];
+
+    // Comparación de contraseña sin hash (usa bcrypt.compare si es hash)
+    if (password !== user.pass) {
+      return res.status(401).json({ message: 'Credenciales inválidas' });
+    }
+
+    // Crear JWT
+    const token = jwt.sign({
+      id: user.Id,
+      username: user.user,
+      permiso: user.permiso
+    }, SECRET_KEY, { expiresIn: '1h' });
+
+    res.json({
+      token,
+      user: {
+        id: user.Id,
+        username: user.user,
+        permiso: user.permiso
+      }
+    });
+
+  } catch (err) {
+    console.error('Error en login:', err);
+    res.status(500).json({ message: 'Error interno del servidor' });
+  }
+});
+
+
 
 // RUTAS PARA PRODUCTOS
 
