@@ -95,6 +95,47 @@ app.post('/tienda/login', async (req, res) => {
 });
 
 
+app.post('/tienda/crearcliente', async (req, res) => {
+  const { nombre, apellidos, rfc } = req.body;
+
+  if (!nombre || !apellidos || !rfc) {
+    return res.status(400).json({ error: 'Faltan datos obligatorios (nombre, apellidos, rfc).' });
+  }
+
+  let connection;
+  try {
+    connection = await createConnection();
+
+    // Verificar si ya existe un cliente con ese RFC
+    const [existing] = await connection.execute(
+      'SELECT Id_cliente FROM cliente WHERE rfc = ?',
+      [rfc]
+    );
+    if (existing.length > 0) {
+      return res.status(409).json({ error: 'Ya existe un cliente con ese RFC.' });
+    }
+
+    // Insertar nuevo cliente
+    const [result] = await connection.execute(
+      'INSERT INTO cliente (nombre, apellidos, rfc) VALUES (?, ?, ?)',
+      [nombre, apellidos, rfc]
+    );
+
+    res.status(201).json({
+      mensaje: 'Cliente creado correctamente',
+      clienteId: result.insertId
+    });
+
+  } catch (error) {
+    console.error('Error al crear cliente:', error);
+    res.status(500).json({ error: 'Error interno del servidor al crear cliente.' });
+  } finally {
+    if (connection) {
+      await connection.end();
+    }
+  }
+});
+
 
 // RUTAS PARA PRODUCTOS
 
