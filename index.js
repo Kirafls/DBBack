@@ -540,7 +540,7 @@ app.get('/api/ventas/:id', async (req, res) => {
 });
 
 // GET - Generar ticket de venta
-app.get('/api/ventas/ticket/:id', async (req, res) => {
+app.get('/api/ventas/:id/ticket', async (req, res) => {
   try {
     const { id } = req.params;
     const connection = await createConnection();
