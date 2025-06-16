@@ -9,9 +9,10 @@ app.use(cors()); // Permitir CORS
 app.use(express.json());
 
 const dbConfig = {
-  host: 'localhost',
+  host: 'localhost', // Cambia esto si tu base de datos está en otro host
+  port: 3307, // Puerto por defecto de MySQL
   user: 'root', 
-  password: '', 
+  password: 'flath', 
   database: 'tiendabd' 
 };
 
@@ -152,7 +153,7 @@ app.get('/api/productos', async (req, res) => {
         unidad,
         categoria,
         activo
-      FROM Producto 
+      FROM producto 
       ORDER BY nombre
     `);
     await connection.end();
@@ -178,7 +179,7 @@ app.get('/api/productos/:id', async (req, res) => {
         unidad,
         categoria,
         activo
-      FROM Producto 
+      FROM producto 
       WHERE id_producto = ?
     `, [id]);
     await connection.end();
@@ -206,7 +207,7 @@ app.post('/api/productos', async (req, res) => {
     
     const connection = await createConnection();
     const [result] = await connection.execute(`
-      INSERT INTO Producto (nombre, descripcion, precio, cantidad, unidad, categoria, activo)
+      INSERT INTO producto (nombre, descripcion, precio, cantidad, unidad, categoria, activo)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `, [nombre, descripcion || null, precio, stock, unidad, categoria || null, activo !== false]);
     
@@ -242,7 +243,7 @@ app.put('/api/productos/:id', async (req, res) => {
     
     const connection = await createConnection();
     const [result] = await connection.execute(`
-      UPDATE Producto 
+      UPDATE producto 
       SET nombre = ?, descripcion = ?, precio = ?, cantidad = ?, unidad = ?, categoria = ?, activo = ?
       WHERE id_producto = ?
     `, [nombre, descripcion || null, precio, stock, unidad, categoria || null, activo !== false, id]);
@@ -276,7 +277,7 @@ app.delete('/api/productos/:id', async (req, res) => {
     const { id } = req.params;
     const connection = await createConnection();
     const [result] = await connection.execute(`
-      DELETE FROM Producto WHERE id_producto = ?
+      DELETE FROM producto WHERE id_producto = ?
     `, [id]);
     await connection.end();
     
@@ -298,7 +299,7 @@ app.patch('/api/productos/:id/estado', async (req, res) => {
     
     const connection = await createConnection();
     const [result] = await connection.execute(`
-      UPDATE Producto SET activo = ? WHERE id_producto = ?
+      UPDATE producto SET activo = ? WHERE id_producto = ?
     `, [activo, id]);
     await connection.end();
     
@@ -367,7 +368,7 @@ app.post('/api/ventas', async (req, res) => {
     
     // Crear la venta
     const [ventaResult] = await connection.execute(
-      'INSERT INTO Venta (fecha, total, metodo_pago) VALUES (NOW(), ?, ?)',
+      'INSERT INTO venta (fecha, total, metodo_pago) VALUES (NOW(), ?, ?)',
       [total, metodoPago]
     );
     
@@ -377,7 +378,7 @@ app.post('/api/ventas', async (req, res) => {
     for (const item of items) {
       // Insertar detalle de venta
       await connection.execute(
-        'INSERT INTO Detalle_Venta (id_venta, id_producto, cantidad, precio_unitario, subtotal) VALUES (?, ?, ?, ?, ?)',
+        'INSERT INTO detalle_Venta (id_venta, id_producto, cantidad, precio_unitario, subtotal) VALUES (?, ?, ?, ?, ?)',
         [ventaId, item.productoId, item.cantidad, item.precioUnitario, item.subtotal]
       );
       
@@ -418,7 +419,7 @@ app.get('/api/venta/xdia', async (req, res) => {
         DATE(fecha) AS fecha,
         SUM(total) AS total_dia,
         COUNT(id_venta) AS cantidad_ventas
-      FROM Venta
+      FROM venta
       GROUP BY DATE(fecha)
       ORDER BY fecha DESC
     `);
@@ -479,7 +480,7 @@ app.get('/api/ventas', async (req, res) => {
         fecha,
         total,
         metodo_pago as metodoPago
-      FROM Venta 
+      FROM venta 
       ORDER BY fecha DESC
     `);
     await connection.end();
@@ -503,7 +504,7 @@ app.get('/api/ventas/:id', async (req, res) => {
         fecha,
         total,
         metodo_pago as metodoPago
-      FROM Venta 
+      FROM venta 
       WHERE id_venta = ?
     `, [id]);
     
@@ -520,7 +521,7 @@ app.get('/api/ventas/:id', async (req, res) => {
         CAST(dv.subtotal AS DECIMAL(10,2)) as subtotal,
         p.nombre as nombreProducto,
         p.unidad
-      FROM Detalle_Venta dv
+      FROM detalle_Venta dv
       JOIN Producto p ON dv.id_producto = p.id_producto
       WHERE dv.id_venta = ?
     `, [id]);
@@ -552,7 +553,7 @@ app.get('/api/ventas/:id/ticket', async (req, res) => {
         fecha,
         total,
         metodo_pago as metodoPago
-      FROM Venta 
+      FROM venta 
       WHERE id_venta = ?
     `, [id]);
     
@@ -568,8 +569,8 @@ app.get('/api/ventas/:id/ticket', async (req, res) => {
         CAST(dv.subtotal AS DECIMAL(10,2)) as subtotal,
         p.nombre as nombreProducto,
         p.unidad
-      FROM Detalle_Venta dv
-      JOIN Producto p ON dv.id_producto = p.id_producto
+      FROM detalle_Venta dv
+      JOIN producto p ON dv.id_producto = p.id_producto
       WHERE dv.id_venta = ?
     `, [id]);
     
@@ -817,5 +818,71 @@ app.post('/tienda/empleados/nuevo', async (req, res) => {
   } catch (error) {
     console.error('Error al crear empleado:', error);
     res.status(500).json({ error: 'Error interno del servidor al crear empleado' });
+  }
+});
+
+app.get('/api/venta/reporte', async (req, res) => {
+  const connection = await createConnection();
+  
+  try {
+    // Consulta para obtener todas las ventas con sus detalles
+    const [ventas] = await connection.execute(`
+      SELECT 
+        v.id_venta,
+        v.fecha,
+        v.total,
+        v.metodo_pago,
+        COALESCE(
+          JSON_ARRAYAGG(
+            JSON_OBJECT(
+              'id_detalle', dv.id_detalle,
+              'id_producto', dv.id_producto,
+              'nombre_producto', p.nombre,
+              'cantidad', dv.cantidad,
+              'precio_unitario', dv.precio_unitario,
+              'subtotal', dv.subtotal
+            )
+          ), 
+          JSON_ARRAY()
+        ) AS detalles
+      FROM venta v
+      LEFT JOIN detalle_venta dv ON v.id_venta = dv.id_venta
+      LEFT JOIN producto p ON dv.id_producto = p.Id_producto
+      GROUP BY v.id_venta
+      ORDER BY v.fecha DESC
+    `);
+
+    // Formatear la respuesta de manera segura
+    const resultado = ventas.map(venta => {
+      let detalles = [];
+      
+      try {
+        // Verificar si detalles es string (necesita parseo) o ya es un array
+        detalles = typeof venta.detalles === 'string' 
+          ? JSON.parse(venta.detalles) 
+          : Array.isArray(venta.detalles) 
+            ? venta.detalles 
+            : [];
+      } catch (error) {
+        console.error(`Error parseando detalles para venta ${venta.id_venta}:`, error);
+        detalles = [];
+      }
+
+      return {
+        id_venta: venta.id_venta,
+        fecha: venta.fecha,
+        total: venta.total,
+        metodo_pago: venta.metodo_pago,
+        detalles: detalles
+      };
+    });
+
+    res.status(200).json(resultado);
+
+  } catch (error) {
+    console.error('Error al obtener ventas:', error);
+    res.status(500).json({ error: 'Error interno del servidor al obtener ventas' });
+  } finally {
+    await connection.end();
   }
 });
