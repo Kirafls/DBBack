@@ -1,198 +1,208 @@
+const cluster = require('cluster');
+const os = require('os');
 const express = require('express');
 const mysql = require('mysql2/promise');
 const cors = require('cors');
 const jwt = require('jsonwebtoken'); // Faltaba importar jwt
 
-const app = express();
-const port = 3000;
-app.use(cors()); // Permitir CORS
-app.use(express.json());
-
-const dbConfig = {
-  host: 'localhost',
-  user: 'root', 
-  password: '', 
-  database: 'tiendabd' 
-};
-
-
-// Crear conexión a la base de datos
-async function createConnection() {
-  try {
-    const connection = await mysql.createConnection(dbConfig);
-    console.log('Conectado a MySQL');
-    return connection;
-  } catch (error) {
-    console.error('Error al conectar con MySQL:', error);
-    throw error;
+// Configuración de clusters
+if (cluster.isMaster) {
+  console.log(`Master ${process.pid} iniciado`);
+  
+  // Crear un worker por cada CPU
+  const numWorkers = os.cpus().length;
+  for (let i = 0; i < numWorkers; i++) {
+    cluster.fork();
   }
-}
+  
+  cluster.on('exit', (worker, code, signal) => {
+    console.log(`Worker ${worker.process.pid} terminado`);
+    cluster.fork(); // Crear nuevo worker si uno falla
+  });
+} else {
 
-// Crear pool de conexiones en lugar de una sola conexión
-const dbPool = mysql.createPool(dbConfig);
+  const app = express();
+  const port = 3000;
 
-// Definir la clave secreta para JWT (debería estar en variables de entorno)
-const SECRET_KEY = 'tu_clave_secreta_super_segura'; // Cambia esto por una clave segura
+  app.use(cors()); // Permitir CORS
+  app.use(express.json());
 
-// Función para buscar usuario (ya la tienes correcta)
-async function buscarUser(connection, data) {
-  const isIdSearch = data.hasOwnProperty('id');
-  const searchValue = isIdSearch ? data.id : data.user;
+  const dbConfig = {
+      host: 'mysql1', // Usamos el nombre del servicio de docker-compose
+      user: 'root',
+      password: 'password',
+      database: 'tiendabd',
+      waitForConnections: true,
+      connectionLimit: 10,
+      queueLimit: 0
+    };
 
-  let query = "SELECT `Id`, `pass`, `user`, `permiso` FROM empleado WHERE ";
-  query += isIdSearch ? "`Id` = ?" : "`user` = ?";
+  // Crear pool de conexiones en lugar de una sola conexión
+  const dbPool = mysql.createPool(dbConfig);
 
-  const [rows] = await connection.execute(query, [searchValue]);
-  return rows;
-}
-// Ruta de login
-app.post('/tienda/login', async (req, res) => {
-  const { username, password, id } = req.body;
+  // Definir la clave secreta para JWT (debería estar en variables de entorno)
+  const SECRET_KEY = 'tu_clave_secreta_super_segura'; // Cambia esto por una clave segura
 
-  if ((!username && !id) || !password) {
-    return res.status(400).json({ message: 'Se requiere (username o id) y password' });
-  }
+  // Función para buscar usuario (ya la tienes correcta)
+  async function buscarUser(connection, data) {
+    const isIdSearch = data.hasOwnProperty('id');
+    const searchValue = isIdSearch ? data.id : data.user;
 
-  try {
-    const connection = await dbPool.getConnection();
-    const searchCriteria = username ? { user: username } : { id };
+    let query = "SELECT `Id`, `pass`, `user`, `permiso` FROM empleado WHERE ";
+    query += isIdSearch ? "`Id` = ?" : "`user` = ?";
 
-    const result = await buscarUser(connection, searchCriteria);
-    connection.release();
-
-    if (result.length === 0) {
-      return res.status(401).json({ message: 'Credenciales inválidas' });
+    const [rows] = await connection.execute(query, [searchValue]);
+    return rows;
     }
 
-    const user = result[0];
+  // Ruta de login
+  app.post('/tienda/login', async (req, res) => {
+    const { username, password, id } = req.body;
 
-    // Comparación de contraseña sin hash (usa bcrypt.compare si es hash)
-    if (password !== user.pass||user.permiso === '0') {
-      return res.status(401).json({ message: 'Credenciales inválidas' });
+    if ((!username && !id) || !password) {
+      return res.status(400).json({ message: 'Se requiere (username o id) y password' });
     }
 
-    // Crear JWT
-    const token = jwt.sign({
-      id: user.Id,
-      username: user.user,
-      permiso: user.permiso
-    }, SECRET_KEY, { expiresIn: '1h' });
+    try {
+      const connection = await dbPool.getConnection();
+      const searchCriteria = username ? { user: username } : { id };
 
-    res.json({
-      token,
-      user: {
+      const result = await buscarUser(connection, searchCriteria);
+      connection.release();
+
+      if (result.length === 0) {
+        return res.status(401).json({ message: 'Credenciales inválidas' });
+      }
+
+      const user = result[0];
+
+      // Comparación de contraseña sin hash (usa bcrypt.compare si es hash)
+      if (password !== user.pass||user.permiso === '0') {
+        return res.status(401).json({ message: 'Credenciales inválidas' });
+      }
+
+      // Crear JWT
+      const token = jwt.sign({
         id: user.Id,
         username: user.user,
         permiso: user.permiso
+      }, SECRET_KEY, { expiresIn: '1h' });
+
+      res.json({
+        token,
+        user: {
+          id: user.Id,
+          username: user.user,
+          permiso: user.permiso
+        }
+      });
+
+    } catch (err) {
+      console.error('Error en login:', err);
+      res.status(500).json({ message: 'Error interno del servidor' });
+    }
+  });
+
+
+  app.post('/tienda/crearcliente', async (req, res) => {
+    const { nombre, apellidos, rfc } = req.body;
+
+    if (!nombre || !apellidos || !rfc) {
+      return res.status(400).json({ error: 'Faltan datos obligatorios (nombre, apellidos, rfc).' });
+    }
+
+    let connection;
+    try {
+      connection = await dbPool.getConnection();
+
+      // Verificar si ya existe un cliente con ese RFC
+      const [existing] = await connection.execute(
+        'SELECT Id_cliente FROM cliente WHERE rfc = ?',
+        [rfc]
+      );
+      if (existing.length > 0) {
+        return res.status(409).json({ error: 'Ya existe un cliente con ese RFC.' });
       }
-    });
 
-  } catch (err) {
-    console.error('Error en login:', err);
-    res.status(500).json({ message: 'Error interno del servidor' });
-  }
-});
+      // Insertar nuevo cliente
+      const [result] = await connection.execute(
+        'INSERT INTO cliente (nombre, apellidos, rfc) VALUES (?, ?, ?)',
+        [nombre, apellidos, rfc]
+      );
 
+      res.status(201).json({
+        mensaje: 'Cliente creado correctamente',
+        clienteId: result.insertId
+      });
 
-app.post('/tienda/crearcliente', async (req, res) => {
-  const { nombre, apellidos, rfc } = req.body;
-
-  if (!nombre || !apellidos || !rfc) {
-    return res.status(400).json({ error: 'Faltan datos obligatorios (nombre, apellidos, rfc).' });
-  }
-
-  let connection;
-  try {
-    connection = await createConnection();
-
-    // Verificar si ya existe un cliente con ese RFC
-    const [existing] = await connection.execute(
-      'SELECT Id_cliente FROM cliente WHERE rfc = ?',
-      [rfc]
-    );
-    if (existing.length > 0) {
-      return res.status(409).json({ error: 'Ya existe un cliente con ese RFC.' });
+    } catch (error) {
+      console.error('Error al crear cliente:', error);
+      res.status(500).json({ error: 'Error interno del servidor al crear cliente.' });
+    } finally {
+      if (connection) {
+        await connection.end();
+      }
     }
+  });
 
-    // Insertar nuevo cliente
-    const [result] = await connection.execute(
-      'INSERT INTO cliente (nombre, apellidos, rfc) VALUES (?, ?, ?)',
-      [nombre, apellidos, rfc]
-    );
 
-    res.status(201).json({
-      mensaje: 'Cliente creado correctamente',
-      clienteId: result.insertId
-    });
+  // RUTAS PARA PRODUCTOS
 
-  } catch (error) {
-    console.error('Error al crear cliente:', error);
-    res.status(500).json({ error: 'Error interno del servidor al crear cliente.' });
-  } finally {
-    if (connection) {
+  // GET - Obtener todos los productos
+  app.get('/api/productos', async (req, res) => {
+    try {
+      const connection = await dbPool.getConnection();
+      const [rows] = await connection.execute(`
+        SELECT 
+          id_producto as id,
+          nombre,
+          descripcion,
+          precio,
+          cantidad as stock,
+          unidad,
+          categoria,
+          activo
+        FROM Producto 
+        ORDER BY nombre
+      `);
       await connection.end();
+      res.json(rows);
+    } catch (error) {
+      console.error('Error al obtener productos:', error);
+      res.status(500).json({ error: 'Error interno del servidor' });
     }
-  }
-});
+  });
 
-
-// RUTAS PARA PRODUCTOS
-
-// GET - Obtener todos los productos
-app.get('/api/productos', async (req, res) => {
-  try {
-    const connection = await createConnection();
-    const [rows] = await connection.execute(`
-      SELECT 
-        id_producto as id,
-        nombre,
-        descripcion,
-        precio,
-        cantidad as stock,
-        unidad,
-        categoria,
-        activo
-      FROM Producto 
-      ORDER BY nombre
-    `);
-    await connection.end();
-    res.json(rows);
-  } catch (error) {
-    console.error('Error al obtener productos:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
-});
-
-// GET - Obtener un producto por ID
-app.get('/api/productos/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const connection = await createConnection();
-    const [rows] = await connection.execute(`
-      SELECT 
-        id_producto as id,
-        nombre,
-        descripcion,
-        precio,
-        cantidad as stock,
-        unidad,
-        categoria,
-        activo
-      FROM Producto 
-      WHERE id_producto = ?
-    `, [id]);
-    await connection.end();
-    
-    if (rows.length === 0) {
-      return res.status(404).json({ error: 'Producto no encontrado' });
+  // GET - Obtener un producto por ID
+  app.get('/api/productos/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const connection = await dbPool.getConnection();
+      const [rows] = await connection.execute(`
+        SELECT 
+          id_producto as id,
+          nombre,
+          descripcion,
+          precio,
+          cantidad as stock,
+          unidad,
+          categoria,
+          activo
+        FROM Producto 
+        WHERE id_producto = ?
+      `, [id]);
+      await connection.end();
+      
+      if (rows.length === 0) {
+        return res.status(404).json({ error: 'Producto no encontrado' });
+      }
+      
+      res.json(rows[0]);
+    } catch (error) {
+      console.error('Error al obtener producto:', error);
+      res.status(500).json({ error: 'Error interno del servidor' });
     }
-    
-    res.json(rows[0]);
-  } catch (error) {
-    console.error('Error al obtener producto:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
-});
+  });
 
 // POST - Crear nuevo producto
 app.post('/api/productos', async (req, res) => {
@@ -204,7 +214,7 @@ app.post('/api/productos', async (req, res) => {
       return res.status(400).json({ error: 'Faltan campos obligatorios' });
     }
     
-    const connection = await createConnection();
+    const connection = await dbPool.getConnection();
     const [result] = await connection.execute(`
       INSERT INTO Producto (nombre, descripcion, precio, cantidad, unidad, categoria, activo)
       VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -240,7 +250,7 @@ app.put('/api/productos/:id', async (req, res) => {
       return res.status(400).json({ error: 'Faltan campos obligatorios' });
     }
     
-    const connection = await createConnection();
+    const connection = await dbPool.getConnection();
     const [result] = await connection.execute(`
       UPDATE Producto 
       SET nombre = ?, descripcion = ?, precio = ?, cantidad = ?, unidad = ?, categoria = ?, activo = ?
@@ -274,7 +284,7 @@ app.put('/api/productos/:id', async (req, res) => {
 app.delete('/api/productos/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const connection = await createConnection();
+    const connection = await dbPool.getConnection();
     const [result] = await connection.execute(`
       DELETE FROM Producto WHERE id_producto = ?
     `, [id]);
@@ -296,7 +306,7 @@ app.patch('/api/productos/:id/estado', async (req, res) => {
     const { id } = req.params;
     const { activo } = req.body;
     
-    const connection = await createConnection();
+    const connection = await dbPool.getConnection();
     const [result] = await connection.execute(`
       UPDATE Producto SET activo = ? WHERE id_producto = ?
     `, [activo, id]);
@@ -332,7 +342,7 @@ process.on('uncaughtException', (err) => {
 
 // POST - Crear nueva venta
 app.post('/api/ventas', async (req, res) => {
-  const connection = await createConnection();
+  const connection = await dbPool.getConnection();
   
   try {
     const { items, total, metodoPago = 'efectivo' } = req.body;
@@ -411,7 +421,7 @@ app.post('/api/ventas', async (req, res) => {
 
 app.get('/api/venta/xdia', async (req, res) => {
   try {
-    const connection = await createConnection();
+    const connection = await dbPool.getConnection();
     
     const [rows] = await connection.execute(`
       SELECT 
@@ -440,7 +450,7 @@ app.get('/api/venta/xdia', async (req, res) => {
 
 app.get('/api/venta/masvendido', async (req, res) => {
   try {
-    const connection = await createConnection();
+    const connection = await dbPool.getConnection();
     
     const [rows] = await connection.execute(`
       SELECT 
@@ -472,7 +482,7 @@ LIMIT 5
 // GET - Obtener todas las ventas
 app.get('/api/ventas', async (req, res) => {
   try {
-    const connection = await createConnection();
+    const connection = await dbPool.getConnection();
     const [rows] = await connection.execute(`
       SELECT 
         id_venta as id,
@@ -494,7 +504,7 @@ app.get('/api/ventas', async (req, res) => {
 app.get('/api/ventas/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const connection = await createConnection();
+    const connection = await dbPool.getConnection();
     
     // Obtener información de la venta
     const [ventaRows] = await connection.execute(`
@@ -543,7 +553,7 @@ app.get('/api/ventas/:id', async (req, res) => {
 app.get('/api/ventas/:id/ticket', async (req, res) => {
   try {
     const { id } = req.params;
-    const connection = await createConnection();
+    const connection = await dbPool.getConnection();
     
     // Obtener información completa de la venta
     const [ventaRows] = await connection.execute(`
@@ -629,7 +639,7 @@ Método de Pago: ${venta.metodoPago.toUpperCase()}
 app.get('/api/ventas/reporte/:fecha', async (req, res) => {
   try {
     const { fecha } = req.params;
-    const connection = await createConnection();
+    const connection = await dbPool.getConnection();
     
     const [rows] = await connection.execute(`
       SELECT 
@@ -818,4 +828,19 @@ app.post('/tienda/empleados/nuevo', async (req, res) => {
     console.error('Error al crear empleado:', error);
     res.status(500).json({ error: 'Error interno del servidor al crear empleado' });
   }
+});
+
+const server = app.listen(0, () => {
+  console.log(`Worker ${process.pid} levantado (puerto asignado dinámicamente)`);
+});
+
+}
+// Manejo de errores no capturados
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled Promise Rejection:', err);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+  process.exit(1);
 });
