@@ -5,8 +5,7 @@ const jwt = require('jsonwebtoken'); // Faltaba importar jwt
 
 const app = express();
 const port = 3000;
-
-app.use(cors());
+app.use(cors()); // Permitir CORS
 app.use(express.json());
 
 const dbConfig = {
@@ -601,5 +600,162 @@ app.get('/api/ventas/reporte/:fecha', async (req, res) => {
   } catch (error) {
     console.error('Error al obtener reporte:', error);
     res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+
+
+
+//Rutas para modifcacion de empleados
+app.get('/tienda/empleados', async (req, res) => {
+  try {
+    const connection = await dbPool.getConnection();
+    const [rows] = await connection.execute(`
+      SELECT Id, user, nombre, apellido, permiso 
+      FROM empleado 
+      ORDER BY nombre
+    `);
+    connection.release();
+    
+    res.json(rows);
+  } catch (error) {
+    console.error('Error al obtener empleados:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+//Ruta para cambio de estado
+app.put('/tienda/empleados/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { nombre, apellido, permiso } = req.body;
+    
+    // Validar campos requeridos
+    if (!nombre || !apellido || !permiso) {
+      return res.status(400).json({ error: 'Faltan campos obligatorios' });
+    }
+    
+    // Validar valores de permiso
+    if (!['0', '1', '2'].includes(permiso)) {
+      return res.status(400).json({ error: 'Permiso no válido (debe ser 0, 1 o 2)' });
+    }
+    
+    const connection = await dbPool.getConnection();
+    const [result] = await connection.execute(
+      `UPDATE empleado 
+       SET nombre = ?, apellido = ?, permiso = ? 
+       WHERE Id = ?`,
+      [nombre, apellido, permiso, id]
+    );
+    connection.release();
+    
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Empleado no encontrado' });
+    }
+    
+    res.json({ 
+      message: 'Empleado actualizado correctamente',
+      id,
+      nombre,
+      apellido,
+      permiso
+    });
+    
+  } catch (error) {
+    console.error('Error al actualizar empleado:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+app.patch('/tienda/empleados/estado', async (req, res) => {
+  try {
+    const { id, estado } = req.body;
+
+    // Validaciones
+    if (!id || isNaN(Number(id))) {
+      return res.status(400).json({ error: 'ID de empleado no válido' });
+    }
+
+    if (!['0', '1', '2'].includes(estado)) {
+      return res.status(400).json({ 
+        error: 'Permiso no válido',
+        message: 'El permiso debe ser 0, 1 o 2',
+        valores_aceptados: ['0', '1', '2']
+      });
+    }
+
+    const connection = await dbPool.getConnection();
+    
+    try {
+      // Consulta CORRECTA usando parámetros preparados
+      const [result] = await connection.execute(
+        'UPDATE `empleado` SET `permiso` = ? WHERE `Id` = ?',
+        [estado, id]
+      );
+
+      connection.release();
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ error: 'Empleado no encontrado' });
+      }
+
+      res.json({
+        success: true,
+        message: `Permiso actualizado a ${estado}`,
+        data: { id, nuevo_permiso: estado }
+      });
+
+    } catch (dbError) {
+      connection.release();
+      console.error('Error en la base de datos:', dbError);
+      res.status(500).json({ error: 'Error al actualizar en la base de datos' });
+    }
+
+  } catch (error) {
+    console.error('Error general:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+app.post('/tienda/empleados/nuevo', async (req, res) => {
+  try {
+    const { user, pass, nombre, apellido, permiso = '1' } = req.body;
+    
+    // Validación básica de los campos requeridos
+    if (!user || !pass || !nombre || !apellido) {
+      return res.status(400).json({ error: 'Faltan campos obligatorios' });
+    }
+
+    const connection = await dbPool.getConnection();
+    
+    // Primero verificamos si el usuario ya existe
+    const [existingUsers] = await connection.execute(
+      'SELECT Id FROM empleado WHERE user = ?',
+      [user]
+    );
+    
+    if (existingUsers.length > 0) {
+      connection.release();
+      return res.status(409).json({ error: 'El nombre de usuario ya existe' });
+    }
+
+    // Insertamos el nuevo usuario
+    const [result] = await connection.execute(
+      'INSERT INTO empleado (user, pass, nombre, apellido, permiso, id_punto_venta) VALUES (?, ?, ?, ?, ?, 1)',
+      [user, pass, nombre, apellido, permiso]
+    );
+    
+    connection.release();
+    
+    // Devolvemos el ID del nuevo usuario creado
+    res.status(201).json({ 
+      id: result.insertId,
+      message: 'Usuario creado exitosamente',
+      user: { user, nombre, apellido, permiso }
+    });
+    
+  } catch (error) {
+    console.error('Error al crear empleado:', error);
+    res.status(500).json({ error: 'Error interno del servidor al crear empleado' });
   }
 });
