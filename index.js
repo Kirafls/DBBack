@@ -67,7 +67,7 @@ app.post('/tienda/login', async (req, res) => {
     const user = result[0];
 
     // Comparación de contraseña sin hash (usa bcrypt.compare si es hash)
-    if (password !== user.pass) {
+    if (password !== user.pass||user.permiso === '0') {
       return res.status(401).json({ message: 'Credenciales inválidas' });
     }
 
@@ -409,6 +409,66 @@ app.post('/api/ventas', async (req, res) => {
   }
 });
 
+app.get('/api/venta/xdia', async (req, res) => {
+  try {
+    const connection = await createConnection();
+    
+    const [rows] = await connection.execute(`
+      SELECT 
+        DATE(fecha) AS fecha,
+        SUM(total) AS total_dia,
+        COUNT(id_venta) AS cantidad_ventas
+      FROM Venta
+      GROUP BY DATE(fecha)
+      ORDER BY fecha DESC
+    `);
+    
+    await connection.end();
+    
+    // Formatear la fecha a formato local (opcional)
+    const formattedRows = rows.map(row => ({
+      ...row,
+      fecha: new Date(row.fecha).toLocaleDateString('es-ES') // Ej: "16/6/2025"
+    }));
+    
+    res.json(formattedRows);
+  } catch (error) {
+    console.error('Error al obtener ventas por día:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+app.get('/api/venta/masvendido', async (req, res) => {
+  try {
+    const connection = await createConnection();
+    
+    const [rows] = await connection.execute(`
+      SELECT 
+    p.id_producto,
+    p.nombre AS nombre_producto,
+    SUM(dv.cantidad) AS total_vendido,
+    SUM(dv.subtotal) AS ingresos_totales,
+    COUNT(dv.id_venta) AS veces_vendido
+FROM 
+    detalle_venta dv
+JOIN 
+    producto p ON dv.id_producto = p.id_producto
+GROUP BY 
+    p.id_producto, p.nombre
+ORDER BY 
+    total_vendido DESC
+LIMIT 5
+    `);
+    
+    await connection.end();
+    
+    res.json(rows);
+  } catch (error) {
+    console.error('Error al obtener productos más vendidos:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
 // GET - Obtener todas las ventas
 app.get('/api/ventas', async (req, res) => {
   try {
@@ -480,7 +540,7 @@ app.get('/api/ventas/:id', async (req, res) => {
 });
 
 // GET - Generar ticket de venta
-app.get('/api/ventas/:id/ticket', async (req, res) => {
+app.get('/api/ventas/ticket/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const connection = await createConnection();
